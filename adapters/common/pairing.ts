@@ -13,6 +13,32 @@ import * as crypto from 'node:crypto'
 import type { PairedUser, PairingState } from './config.js'
 
 const SAFE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' // 排除 0/O/1/I/L
+
+// 速率限制：每个 userId 在 RATE_LIMIT_WINDOW_MS 内最多 RATE_LIMIT_MAX_ATTEMPTS 次失败尝试
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
+const RATE_LIMIT_MAX_ATTEMPTS = 5
+const failedAttempts = new Map<string, { count: number; firstAttempt: number }>()
+
+function isRateLimited(userId: string | number): boolean {
+  const key = String(userId)
+  const record = failedAttempts.get(key)
+  if (!record) return false
+  if (Date.now() - record.firstAttempt > RATE_LIMIT_WINDOW_MS) {
+    failedAttempts.delete(key)
+    return false
+  }
+  return record.count >= RATE_LIMIT_MAX_ATTEMPTS
+}
+
+function recordFailedAttempt(userId: string | number): void {
+  const key = String(userId)
+  const record = failedAttempts.get(key)
+  if (!record || Date.now() - record.firstAttempt > RATE_LIMIT_WINDOW_MS) {
+    failedAttempts.set(key, { count: 1, firstAttempt: Date.now() })
+  } else {
+    record.count++
+  }
+}
 const CODE_LENGTH = 6
 const CODE_TTL_MS = 60 * 60 * 1000 // 60 minutes
 
@@ -58,8 +84,8 @@ export function isPaired(
 
   // allowedUsers 非空时检查
   if (allowedUsers.length > 0 && allowedUsers.includes(userId)) return true
-  // allowedUsers 为空且 pairedUsers 也为空 => 旧行为（允许所有人）
-  if (pairedUsers.length === 0 && allowedUsers.length === 0) return true
+  // 默认关闭：没有配置任何用户时拒绝访问（需要先配对）
+  if (pairedUsers.length === 0 && allowedUsers.length === 0) return false
 
   return pairedUsers.some((p) => String(p.userId) === String(userId))
 }
@@ -76,13 +102,19 @@ export function tryPair(
   const file = readConfigFile()
   const pairing: PairingState = file.pairing ?? { code: null, expiresAt: null, createdAt: null }
 
+  // 速率限制检查
+  if (isRateLimited(senderInfo.userId)) return false
+
   // 检查配对码是否有效
   if (!pairing.code || !pairing.expiresAt) return false
   if (Date.now() > pairing.expiresAt) return false
 
   // 比较（忽略大小写和空格）
   const input = messageText.trim().toUpperCase()
-  if (input !== pairing.code.toUpperCase()) return false
+  if (input !== pairing.code.toUpperCase()) {
+    recordFailedAttempt(senderInfo.userId)
+    return false
+  }
 
   // 配对成功：写入 pairedUsers
   const platformConfig = file[platform] ?? {}
@@ -104,4 +136,14 @@ export function tryPair(
   writeConfigFile(file)
 
   return true
+}
+
+/** 统一的用户授权检查（供各 adapter 调用） */
+export function isAllowedUser(platform: 'telegram' | 'feishu', userId: string | number): boolean {
+  try {
+    const cfgFile = readConfigFile()
+    return isPaired(platform, userId, cfgFile)
+  } catch {
+    return false
+  }
 }

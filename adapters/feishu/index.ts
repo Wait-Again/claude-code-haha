@@ -16,7 +16,7 @@ import { loadConfig } from '../common/config.js'
 import { splitMessage, formatToolUse, formatPermissionRequest, truncateInput } from '../common/format.js'
 import { SessionStore } from '../common/session-store.js'
 import { AdapterHttpClient } from '../common/http-client.js'
-import { isPaired, tryPair } from '../common/pairing.js'
+import { isAllowedUser, tryPair } from '../common/pairing.js'
 
 // ---------- init ----------
 
@@ -55,23 +55,6 @@ let botOpenId: string | null = null
 let wsClient: InstanceType<typeof Lark.WSClient> | null = null
 
 // ---------- helpers ----------
-
-function isAllowedUser(openId: string): boolean {
-  try {
-    const cfgFile = JSON.parse(
-      require('node:fs').readFileSync(
-        require('node:path').join(
-          process.env.CLAUDE_CONFIG_DIR || require('node:path').join(require('node:os').homedir(), '.claude'),
-          'adapters.json'
-        ),
-        'utf-8'
-      )
-    )
-    return isPaired('feishu', openId, cfgFile)
-  } catch {
-    return false
-  }
-}
 
 function getChatState(chatId: string): ChatState {
   let state = chatStates.get(chatId)
@@ -400,7 +383,7 @@ async function handleMessage(data: any): Promise<void> {
 
   // 只处理私聊
   if (chatType === 'p2p') {
-    if (!isAllowedUser(senderOpenId)) {
+    if (!isAllowedUser('feishu', senderOpenId)) {
       // 尝试配对
       const pairText = extractText(content, msgType)
       if (pairText) {

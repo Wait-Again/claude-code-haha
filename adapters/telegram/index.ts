@@ -14,7 +14,7 @@ import { loadConfig } from '../common/config.js'
 import { splitMessage, formatToolUse, formatPermissionRequest } from '../common/format.js'
 import { SessionStore } from '../common/session-store.js'
 import { AdapterHttpClient } from '../common/http-client.js'
-import { isPaired, tryPair } from '../common/pairing.js'
+import { isAllowedUser, tryPair } from '../common/pairing.js'
 
 const TELEGRAM_TEXT_LIMIT = 4000 // leave margin below 4096
 
@@ -42,23 +42,6 @@ const buffers = new Map<string, MessageBuffer>()
 const pendingProjectSelection = new Map<string, boolean>()
 
 // ---------- helpers ----------
-
-function isAllowedUser(userId: number): boolean {
-  try {
-    const cfgFile = JSON.parse(
-      require('node:fs').readFileSync(
-        require('node:path').join(
-          process.env.CLAUDE_CONFIG_DIR || require('node:path').join(require('node:os').homedir(), '.claude'),
-          'adapters.json'
-        ),
-        'utf-8'
-      )
-    )
-    return isPaired('telegram', userId, cfgFile)
-  } catch {
-    return false
-  }
-}
 
 function getBuffer(chatId: string): MessageBuffer {
   let buf = buffers.get(chatId)
@@ -289,7 +272,7 @@ bot.on('message:text', (ctx) => {
   const text = ctx.message.text
 
   // 检查配对状态
-  if (!isAllowedUser(userId)) {
+  if (!isAllowedUser('telegram', userId)) {
     // 尝试配对
     const displayName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ')
     const success = tryPair(text.trim(), { userId, displayName }, 'telegram')
